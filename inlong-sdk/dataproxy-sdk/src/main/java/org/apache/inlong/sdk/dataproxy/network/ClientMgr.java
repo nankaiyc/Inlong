@@ -417,6 +417,17 @@ public class ClientMgr {
     }
 
     // public synchronized NettyClient getClientByLeastConnections() {}
+    public synchronized NettyClient getClientByGroupConsistencyHash(String groupId) {
+        NettyClient client;
+        if (clientList.isEmpty()) {
+            return null;
+        }
+        String hash = ConsistencyHashUtil.hashMurMurHash(groupId);
+        HashRing cluster = HashRing.getInstance();
+        HostInfo info = cluster.getNode(hash);
+        client = this.clientMap.get(info);
+        return client;
+    }
 
     public synchronized NettyClient getClientByConsistencyHash(String messageId) {
         NettyClient client;
@@ -1016,6 +1027,9 @@ public class ClientMgr {
                 break;
             case WEIGHT_RANDOM:
                 client = getClientByWeightRandom();
+                break;
+            case GROUP_CONSISTENCY_HASH:
+                client = getClientByGroupConsistencyHash(encodeObject.getGroupId());
                 break;
         }
         return client;
