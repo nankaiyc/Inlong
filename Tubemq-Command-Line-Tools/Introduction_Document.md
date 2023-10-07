@@ -1,244 +1,53 @@
-# 设计和使用文档
+# 设计文档
 
 ## 项目名称：
 
-TubeMQ Command Line Tool
+SDK 负载优化
 
-## 介绍
+## HashRing算法：
 
-本文档详细介绍了TubeMQ命令行工具的设计和开发过程，包括项目目标、功能、架构、关键模块、命令行参数、使用示例等内容。
+HashRing 是一种负载均衡的算法，它基于一致性哈希算法（Consistent Hashing）来实现。一致性哈希是一种广泛用于分布式系统中的负载均衡算法，它的主要思想是将请求或数据均匀地分布到多个服务器上，以确保负载分布均匀，同时在添加或删除服务器时最大程度地减少数据迁移。
 
-## 项目目标
+以下是一致性哈希算法如何实现负载均衡的工作原理：
 
-本项目的目标是创建一个方便用户管理和操作TubeMQ主题和消息的命令行工具。通过该工具，用户可以执行主题管理操作（创建、删除、修改、查询），同时还可以发送消息到主题以及从主题中消费消息。
+1. **构建哈希环**：一致性哈希算法首先将所有的服务器节点和数据分片映射到一个虚拟的哈希环上。这个哈希环是一个圆环，每个节点和数据分片在环上有一个唯一的位置。
+2. **计算哈希值**：当有请求到达时，算法会计算请求的哈希值，通常是对请求的某个唯一标识（如 URL、键值等）进行哈希计算。
+3. **定位节点**：接下来，算法会在哈希环上找到最接近该哈希值的节点位置。这个节点被选择为处理请求的目标节点。
+4. **负载均衡**：由于哈希值的分布是均匀的，因此请求将被分配到接近哈希值的节点上，从而实现了负载均衡。当有新的节点加入或旧节点离开时，只有少量的请求会受到影响，因为它们会映射到新的节点或从旧节点上移除。
+5. **虚拟节点**：为了进一步均衡负载，一致性哈希算法通常引入了虚拟节点的概念。每个实际节点在哈希环上可以有多个虚拟节点，这样可以增加哈希环上的节点数量，使数据分布更均匀。
+6. **数据持久性**：一致性哈希算法在数据持久性方面也很有用。当服务器节点发生故障或被添加时，只需重新分配少量数据，而不是整个数据集。
 
-## 功能概述
+总结来说，一致性哈希算法通过哈希环和虚拟节点的方式，将请求均匀地分发到不同的服务器节点上，从而实现负载均衡。这种算法适用于分布式系统和缓存服务器等需要高效负载均衡和数据分布的场景。
 
-TubeMQ命令行工具将支持以下主要功能：
+## 修改文件
 
-- 主题管理：支持创建、删除、修改、查询和列出主题的信息。
-- 消息生产：允许用户发送消息到指定主题。
-- 消息消费：允许用户从指定主题中拉取和消费消息。
+以下是修改的相关文件：
 
-## 依赖
+1. LoadBalance.java
 
-项目将依赖以下外部库和框架：
+   这段代码定义了一个名为 LoadBalance 的枚举类型，该枚举用于表示不同的负载均衡算法或策略。
+   1. LoadBalance 枚举类型：这是一个枚举类型，表示各种不同的负载均衡策略。每个枚举值都代表了一种负载均衡策略，具体的策略包括：
+   - RANDOM：随机选择一个目标节点来处理请求。
+   - ROBIN：轮询选择目标节点来处理请求，每次选择下一个节点。
+   - CONSISTENCY_HASH：使用一致性哈希算法选择目标节点，通常用于分布式环境中。
+   - WEIGHT_RANDOM：根据权重随机选择目标节点，不同节点的权重决定被选中的概率。
+   - WEIGHT_ROBIN：根据权重轮询选择目标节点，不同节点的权重决定了被轮询到的频率。
+   - GROUP_CONSISTENCY_HASH：组内一致性哈希算法，可能表示在特定的分组中使用一致性哈希。
+   2. 枚举值的构造方法：每个枚举值都有一个构造方法，用于初始化枚举值的名称和索引。例如，RANDOM 的名称是 "random"，索引是 0。
+   
+   3. getName 方法：用于获取负载均衡策略的名称（以字符串形式返回）。
+   
+   4. getIndex 方法：用于获取负载均衡策略的索引，通常用于标识不同策略。
+   
+      
+   
+2. ClientMgr.java
 
-- Apache Commons CLI：用于解析和处理命令行参数。
-- TubeMQ Client：用于与TubeMQ服务进行通信的客户端库。
-- FastJSON：用于处理JSON数据。
+   这段代码重点介绍我们实现的getClientByGroupConsistencyHash方法。该函数的总体目标是根据给定的组标识 `groupId`，通过一致性哈希算法来选择一个与该组相关联的 Netty 客户端（NettyClient）。一致性哈希算法用于分布式系统中的负载均衡和路由，它可以将请求分配给特定的节点或客户端，以实现均衡的负载分布。该代码的主要步骤包括：
 
-## 安装与部署
+   1. 首先，它检查客户端列表（`clientList`）是否为空。如果没有可用的客户端，将返回 `null`，表示无法为给定的组提供服务。
+   2. 接下来，它将组标识 `groupId` 哈希化为一个字符串 `hash`，通常用于将组映射到一个范围内的哈希值。
+   3. 然后，它使用哈希值 `hash` 在哈希环（`HashRing`）中查找相应的节点信息（`HostInfo`）。这个节点信息可能包含有关与客户端相关的主机地址等数据。
+   4. 最后，它根据节点信息在映射 `clientMap` 中查找与该节点关联的 Netty 客户端对象，并将其返回。这样，代码返回了与给定组相关联的客户端，以供进一步的网络通信和处理。
 
-以下是安装和部署步骤：
 
-1. 从Inlong官网克隆项目代码或下载代码包。
-2. 进入inlong-tubemq/tubemq-docker文件夹，使用Maven构建docker镜像
-3. 在命令行中执行JAR文件，使用相应的命令和参数操作TubeMQ。
-
-## 命令行参数
-
-工具支持以下命令行参数：
-
-- `-h` 或 `-help`：显示帮助信息。
-- `-t` 或 `-topic`：指定操作的主题名称。
-- `-c` 或 `-create`：创建指定主题。
-- `-d` 或 `-delete`：删除指定主题。
-- `-u` 或 `-update`：更新指定主题。
-- `-l` 或 `-list`：列出所有主题信息。
-- `-s` 或 `-send`：发送消息到主题。
-- `-master`：master IP地址。
-- `-consumergroup`：消费组。
-- `-deleteWhen` 或 `-deletePolicy` 或 ...：主题相关的参数。
-
-
-## 命令与用法
-
-### 主题相关命令
-
-#### 1.创建主题
-
-执行以下命令以创建主题demo：
-
-java -jar InlongTask1.jar -t demo -c
-
-   ![](imgs/create.jpeg)
-
-#### 2.删除主题
-
-执行以下命令以删除主题demo：
-
-java -jar InlongTask1.jar -t demo -d
-
-   ![](imgs/delete_solution2.jpeg)
-
-#### 3.列出所有主题
-
-执行以下命令以列出所有主题信息(截图仅展示部分)：
-
-java -jar InlongTask1.jar -l
-
-   ![](imgs/list1.jpeg)
-
-#### 4.列出某一个主题
-
-执行以下命令以列出主题demo信息：
-
-java -jar InlongTask1.jar -t demo -l
-
-   ![](imgs/list2.jpeg)
-
-#### 5.更新主题
-
-执行以下命令以更新主题demo信息，将acceptPublish的值置为false：
-
-java -jar InlongTask1.jar -t demo -u -acceptPublish false
-
-   ![](imgs/update.jpeg)
-
-### 消息相关命令
-
-#### 发送消息
-
-执行以下命令以发送消息到主题demo：
-
-java -jar InlongTask1.jar -t demo -s "async send message from single-session-factory!" -master 127.0.0.1:8715
-
-   ![](imgs/produce.jpeg)
-
-#### 消费消息
-
-执行以下命令以从主题demo中消费消息：
-
-java -jar InlongTask1.jar -t demo -m -master 127.0.0.1:8715 -consumergroup test
-
-   ![](imgs/consume.jpeg)
-
-从主题demo中获得消费消息：
-   ![](imgs/consume1.jpeg)
-## 设计和实现
-
-### 整体架构
-
-TubeMQ命令行工具的架构采用命令行界面与TubeMQ客户端库相结合。工具解析命令行参数，调用TubeMQ客户端方法与TubeMQ服务进行通信。以下是工具的主要组件：
-
-- 命令行参数解析器：使用Apache Commons CLI库解析和处理命令行参数。
-- TubeMQ客户端：与TubeMQ服务进行通信，执行主题管理和消息操作。
-
-### 主要模块和类
-
-#### TubeMQTool.java
-
-这是整个TubeMQ命令行工具的入口类，负责协调不同的功能模块和处理命令行参数。
-
-设计原理:
-- 解析命令行参数：使用Apache Commons CLI库解析命令行参数，识别用户输入的指令和选项。
-   ![](imgs/TubeMQTool1.jpeg)
-- 构建命令行选项：使用Options类创建不同的命令行选项，包括主题操作、消息发送和消费等。
-   ![](imgs/TubeMQTool2.jpeg)
-- 调用功能模块：根据用户输入的指令和选项，调用对应的功能模块来执行操作。
-   ![](imgs/TubeMQTool3.jpeg)
-- 打印帮助信息：在用户输入错误的情况下，打印帮助信息指导用户正确使用工具。
-
-#### TubeMQTopicCreator.java
-
-这个类负责创建主题。根据用户输入的主题名称和相关参数，构造HTTP请求并调用TubeMQ服务接口来创建主题。
-
-设计原理:
-- 构造请求参数：根据用户输入的主题名称、非必需参数等，构造HTTP请求的参数。
-   ![](imgs/TubeMQTopicCreator1.jpeg)
-- 发送HTTP请求：使用HttpClient库创建HTTP请求，调用TubeMQ服务接口来创建主题。
-   ![](imgs/TubeMQTopicCreator2.jpeg)
-- 处理响应：解析HTTP响应，判断是否创建成功，并输出相应的提示信息。
-   ![](imgs/TubeMQTopicCreator3.jpeg)
-- 
-#### TubeMQTopicDelete.java
-
-这个类负责删除主题。根据用户输入的主题名称，构造HTTP请求并调用TubeMQ服务接口来删除主题。
-我们先采用软删除，再进行硬删除完成主题删除
-
-设计原理:
-
-这里以硬删除为例：
-- 构造请求参数：根据用户输入的主题名称、相关参数等，构造HTTP请求的参数。
-   ![](imgs/TubeMQTopicDelete1.jpeg)
-- 发送HTTP请求：使用HttpClient库创建HTTP请求，调用TubeMQ服务接口来删除主题。
-   ![](imgs/TubeMQTopicDelete2.jpeg)
-- 处理响应：解析HTTP响应，判断是否删除成功，并输出相应的提示信息。
-   ![](imgs/TubeMQTopicDelete3.jpeg)
-
-#### TubeMQTopicQuery.java
-
-这个类负责列出所有主题的信息。调用TubeMQ服务接口来获取所有主题的信息，并输出到控制台。
-
-设计原理:
-- 调用服务接口：使用HttpClient库创建HTTP请求，调用TubeMQ服务接口来获取主题信息。
-   ![](imgs/TubeMQTopicQuery1.png)
-- 解析响应：解析HTTP响应，提取主题信息并进行输出。
-   ![](imgs/TubeMQTopicQuery2.png)
-
-#### TubeMQTopicModify.java
-
-这个类用于修改TubeMQ主题信息的Java类文件。该文件提供了一个命令行界面，允许用户通过命令行指令来修改指定主题的配置信息。
-
-设计原理:
-- 解析命令行参数，获取要修改的主题名称以及相关参数。
-   ![](imgs/TubeMQTopicModify1.png)
-- 构造HTTP请求，将修改请求发送到TubeMQ服务器。
-   ![](imgs/TubeMQTopicModify2.png)
-- 处理服务器返回的响应，输出成功或错误信息。
-   ![](imgs/TubeMQTopicModify3.png)
-
-#### AsyncProducer.java
-
-这个类负责向指定主题发送消息。根据用户输入的主题和消息内容，使用TubeMQ客户端库来发送消息。
-
-设计原理:
-- 创建客户端：使用TubeMQ客户端库创建消息生产者客户端。
-- 发送消息：根据用户输入的主题和消息内容，构造消息对象并发送到指定主题。
-   ![](imgs/AsyncProducer.png)
-
-#### PushConsumer.java
-
-这个类负责从指定主题中消费消息。根据用户输入的主题，使用TubeMQ客户端库来拉取消息并进行消费。
-
-设计原理:
-- 创建客户端：使用TubeMQ客户端库创建消息消费者客户端。
-- 消费消息：从指定主题中拉取消息，对每条消息进行处理。
-   ![](imgs/PushConsumer.png)
-
-通过这些类的协作，TubeMQ命令行工具能够实现创建、删除、列出主题，以及发送和消费消息等功能。这种模块化的设计使得每个类职责明确，便于扩展和维护。
-
-
-## 注意事项及常见的报错
-
-### 1.创建报错
-
-当执行创建主题命令时出现如下报错信息：
-   ![](imgs/create_err.jpeg)
-
-### 解决方案
-
-报错原因是该主题已经被创建，因此修改命令创建其他主题即可
-
-### 2.删除报错
-
-当执行删除主题命令时出现如下报错信息：
-   ![](imgs/delete_err.jpeg)
-
-### 解决方案
-
-报错原因是该主题的acceptPublish和acceptSubscribe未被置于false，因此执行如下命令：
-   ![](imgs/delete_solution1.jpeg)
-
-然后再执行相同命令发现问题已解决：
-   ![](imgs/delete_solution2.jpeg)
-
-### 3.更新报错
-
-当执行更新主题命令时出现如下报错信息：
-   ![](imgs/update_err.jpeg)
-
-### 解决方案
-
-报错原因是该主题的acceptPublish已经被置于false，因此修改命令更新其他项即可
